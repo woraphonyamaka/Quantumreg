@@ -1,0 +1,7 @@
+ols_fit <- function(X, y, fit_intercept = TRUE) {
+  df <- data.frame(y = y, X)
+  if (fit_intercept) fit <- lm(y ~ ., data=df) else fit <- lm(y ~ . + 0, data=df)
+  coef_all <- coef(fit); intercept <- if (fit_intercept) as.numeric(coef_all[1]) else 0
+  w <- if (fit_intercept) as.numeric(coef_all[-1]) else as.numeric(coef_all)
+  mse <- mean((y - as.numeric(predict(fit)))^2); list(coef=c(intercept, w), mse=mse)
+}
