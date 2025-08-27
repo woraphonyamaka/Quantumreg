@@ -1,0 +1,8 @@
+bit_scalings <- function(n_bits) { w <- 2^(0:(n_bits - 1)); w / sum(w) }
+encoding_matrices <- function(n_params, n_bits, bounds) {
+  lb <- bounds[1]; ub <- bounds[2]; scales <- bit_scalings(n_bits)
+  a <- rep(lb, n_params); B <- matrix(0, n_params, n_params * n_bits)
+  for (i in seq_len(n_params)) for (b in 0:(n_bits - 1))
+    B[i, (i - 1) * n_bits + b + 1] <- (ub - lb) * scales[b + 1]
+  list(a = a, B = B)
+}
