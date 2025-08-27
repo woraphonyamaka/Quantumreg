@@ -1,0 +1,11 @@
+build_lr_qubo <- function(X, y, n_bits=4, bounds=c(-2,2), fit_intercept=TRUE, l2=0) {
+  p <- ncol(X)
+  X_aug <- if (fit_intercept) cbind(1, X) else X
+  p_aug <- if (fit_intercept) p+1 else p
+  Qw <- crossprod(X_aug) + l2 * diag(p_aug); cvec <- crossprod(X_aug, y)
+  enc <- encoding_matrices(p_aug, n_bits, bounds); a <- enc$a; B <- enc$B
+  Qz <- t(B) %*% Qw %*% B
+  qz <- as.numeric(2 * (t(a) %*% Qw %*% B) - 2 * (t(cvec) %*% B))
+  const <- as.numeric(t(a) %*% Qw %*% a - 2 * t(cvec) %*% a + sum(y^2))
+  list(Qz=Qz, qz=qz, const=const, meta=list(n_features=p, n_bits=n_bits, bounds=bounds, fit_intercept=fit_intercept))
+}
