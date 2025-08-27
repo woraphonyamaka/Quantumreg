@@ -1,0 +1,22 @@
+# Build Z_i and X_i (sparse Kron products)
+pauliZ_i <- function(i, n) {
+  Z <- Matrix(c(1,0,0,-1), 2, 2, sparse=TRUE); I <- Diagonal(2)
+  mats <- vector("list", n); for (k in 1:n) mats[[k]] <- if (k==i) Z else I
+  Reduce(kronecker, mats)
+}
+pauliX_i <- function(i, n) {
+  X <- Matrix(c(0,1,1,0), 2, 2, sparse=TRUE); I <- Diagonal(2)
+  mats <- vector("list", n); for (k in 1:n) mats[[k]] <- if (k==i) X else I
+  Reduce(kronecker, mats)
+}
+build_cost_hamiltonian <- function(h, J) {
+  n <- length(h); H <- Matrix(0, 2^n, 2^n, sparse=TRUE)
+  for (i in 1:n) if (h[i] != 0) H <- H + h[i]*pauliZ_i(i, n)
+  for (i in 1:(n-1)) for (j in (i+1):n) if (J[i,j] != 0) H <- H + J[i,j]*(pauliZ_i(i,n) %*% pauliZ_i(j,n))
+  H
+}
+build_mixer_hamiltonian <- function(n) {
+  Hm <- Matrix(0, 2^n, 2^n, sparse=TRUE)
+  for (i in 1:n) Hm <- Hm + pauliX_i(i, n)
+  Hm
+}
