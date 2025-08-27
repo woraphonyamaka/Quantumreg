@@ -1,0 +1,9 @@
+# QUBO -> Ising
+qubo_to_ising <- function(Q, q, const=0) {
+  Q <- 0.5*(Q + t(Q)); n <- nrow(Q)
+  diagQ <- diag(Q); Qoff <- Q; diag(Qoff) <- 0
+  J <- Qoff / 4
+  h <- -rowSums(Q)/2 - q/2 + diagQ/4
+  c0 <- const + sum(Q)/4 + sum(q)/2
+  list(h=as.numeric(h), J=as.matrix(J), c0=as.numeric(c0))
+}
