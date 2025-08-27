@@ -1,0 +1,7 @@
+standardize_xy <- function(X, y) {
+  X_mean <- colMeans(X); X_sd <- apply(X, 2, sd); X_sd[X_sd == 0] <- 1
+  Xs <- sweep(sweep(X, 2, X_mean, "-"), 2, X_sd, "/")
+  y_mean <- mean(y); y_sd <- sd(y); if (y_sd == 0) y_sd <- 1
+  ys <- (y - y_mean) / y_sd
+  list(Xs = Xs, ys = ys, stats = list(X_mean=X_mean, X_sd=X_sd, y_mean=y_mean, y_sd=y_sd))
+}
