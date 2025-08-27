@@ -1,0 +1,4 @@
+mse_fun <- function(X, y, w_full, fit_intercept) {
+  yhat <- if (fit_intercept) w_full[1] + as.numeric(X %*% w_full[-1]) else as.numeric(X %*% w_full)
+  mean((y - yhat)^2)
+}
