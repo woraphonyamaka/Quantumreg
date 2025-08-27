@@ -1,0 +1,26 @@
+run_qaoa_lr_pureR <- function(X, y, n_bits=3, bounds=c(-2,2), fit_intercept=TRUE, l2=0.01,
+                              p_depth=2, seed=7) {
+  set.seed(seed)
+  std <- standardize_xy(X, y); Xs <- std$Xs; ys <- std$ys
+  qubo <- build_lr_qubo(Xs, ys, n_bits=n_bits, bounds=bounds, fit_intercept=fit_intercept, l2=l2)
+  Q <- as.matrix(0.5*(qubo$Qz + t(qubo$Qz))); q <- qubo$qz
+  ising <- qubo_to_ising(Q, q, qubo$const)
+  nvars <- length(ising$h); if (nvars > 12) warning("Large (2^n) Hamiltonian; consider fewer bits/features.")
+  Hc <- build_cost_hamiltonian(ising$h, ising$J); Hm <- build_mixer_hamiltonian(nvars)
+  best <- qaoa_simulate(Hc, Hm, p=p_depth)  # grid over angles; you can refine
+  psi <- best$psi; probs <- as.numeric(Mod(psi)^2)
+  idx <- which.max(probs) - 1
+  bits <- rev(as.integer(intToBits(idx))[1:nvars])  # try big-endian; flip if needed
+  # decode
+  decode <- function(z, meta, p_actual) {
+    n_bits <- meta$n_bits; bounds <- meta$bounds; fit_intercept <- meta$fit_intercept
+    p <- if (fit_intercept) p_actual + 1L else p_actual
+    scales <- 2^(0:(n_bits-1)); scales <- scales / sum(scales)
+    a <- rep(bounds[1], p); B <- matrix(0, p, p*n_bits)
+    for (i in 1:p) for (b in 0:(n_bits-1)) B[i, (i-1)*n_bits + b + 1] <- (bounds[2]-bounds[1]) * scales[b+1]
+    as.numeric(a + B %*% z)
+  }
+  w_std <- decode(bits, qubo$meta, ncol(Xs))
+  list(weights_std=w_std, mse_std=mse_fun(Xs, ys, w_std, fit_intercept), energy=best$energy,
+       beta=best$beta, gamma=best$gamma, bits=bits)
+}
