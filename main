@@ -1,0 +1,136 @@
+# needs: install.packages("Matrix"); install.packages("expm")
+library(Matrix)
+library(expm)
+library(QuantumOps)
+# ---- Helpers from earlier (unchanged) ----
+bit_scalings <- function(n_bits) { w <- 2^(0:(n_bits - 1)); w / sum(w) }
+encoding_matrices <- function(n_params, n_bits, bounds) {
+  lb <- bounds[1]; ub <- bounds[2]; scales <- bit_scalings(n_bits)
+  a <- rep(lb, n_params); B <- matrix(0, n_params, n_params * n_bits)
+  for (i in seq_len(n_params)) for (b in 0:(n_bits - 1))
+    B[i, (i - 1) * n_bits + b + 1] <- (ub - lb) * scales[b + 1]
+  list(a = a, B = B)
+}
+standardize_xy <- function(X, y) {
+  X_mean <- colMeans(X); X_sd <- apply(X, 2, sd); X_sd[X_sd == 0] <- 1
+  Xs <- sweep(sweep(X, 2, X_mean, "-"), 2, X_sd, "/")
+  y_mean <- mean(y); y_sd <- sd(y); if (y_sd == 0) y_sd <- 1
+  ys <- (y - y_mean) / y_sd
+  list(Xs = Xs, ys = ys, stats = list(X_mean=X_mean, X_sd=X_sd, y_mean=y_mean, y_sd=y_sd))
+}
+ols_fit <- function(X, y, fit_intercept = TRUE) {
+  df <- data.frame(y = y, X)
+  if (fit_intercept) fit <- lm(y ~ ., data=df) else fit <- lm(y ~ . + 0, data=df)
+  coef_all <- coef(fit); intercept <- if (fit_intercept) as.numeric(coef_all[1]) else 0
+  w <- if (fit_intercept) as.numeric(coef_all[-1]) else as.numeric(coef_all)
+  mse <- mean((y - as.numeric(predict(fit)))^2); list(coef=c(intercept, w), mse=mse)
+}
+mse_fun <- function(X, y, w_full, fit_intercept) {
+  yhat <- if (fit_intercept) w_full[1] + as.numeric(X %*% w_full[-1]) else as.numeric(X %*% w_full)
+  mean((y - yhat)^2)
+}
+build_lr_qubo <- function(X, y, n_bits=4, bounds=c(-2,2), fit_intercept=TRUE, l2=0) {
+  p <- ncol(X)
+  X_aug <- if (fit_intercept) cbind(1, X) else X
+  p_aug <- if (fit_intercept) p+1 else p
+  Qw <- crossprod(X_aug) + l2 * diag(p_aug); cvec <- crossprod(X_aug, y)
+  enc <- encoding_matrices(p_aug, n_bits, bounds); a <- enc$a; B <- enc$B
+  Qz <- t(B) %*% Qw %*% B
+  qz <- as.numeric(2 * (t(a) %*% Qw %*% B) - 2 * (t(cvec) %*% B))
+  const <- as.numeric(t(a) %*% Qw %*% a - 2 * t(cvec) %*% a + sum(y^2))
+  list(Qz=Qz, qz=qz, const=const, meta=list(n_features=p, n_bits=n_bits, bounds=bounds, fit_intercept=fit_intercept))
+}
+# QUBO -> Ising
+qubo_to_ising <- function(Q, q, const=0) {
+  Q <- 0.5*(Q + t(Q)); n <- nrow(Q)
+  diagQ <- diag(Q); Qoff <- Q; diag(Qoff) <- 0
+  J <- Qoff / 4
+  h <- -rowSums(Q)/2 - q/2 + diagQ/4
+  c0 <- const + sum(Q)/4 + sum(q)/2
+  list(h=as.numeric(h), J=as.matrix(J), c0=as.numeric(c0))
+}
+# Build Z_i and X_i (sparse Kron products)
+pauliZ_i <- function(i, n) {
+  Z <- Matrix(c(1,0,0,-1), 2, 2, sparse=TRUE); I <- Diagonal(2)
+  mats <- vector("list", n); for (k in 1:n) mats[[k]] <- if (k==i) Z else I
+  Reduce(kronecker, mats)
+}
+pauliX_i <- function(i, n) {
+  X <- Matrix(c(0,1,1,0), 2, 2, sparse=TRUE); I <- Diagonal(2)
+  mats <- vector("list", n); for (k in 1:n) mats[[k]] <- if (k==i) X else I
+  Reduce(kronecker, mats)
+}
+build_cost_hamiltonian <- function(h, J) {
+  n <- length(h); H <- Matrix(0, 2^n, 2^n, sparse=TRUE)
+  for (i in 1:n) if (h[i] != 0) H <- H + h[i]*pauliZ_i(i, n)
+  for (i in 1:(n-1)) for (j in (i+1):n) if (J[i,j] != 0) H <- H + J[i,j]*(pauliZ_i(i,n) %*% pauliZ_i(j,n))
+  H
+}
+build_mixer_hamiltonian <- function(n) {
+  Hm <- Matrix(0, 2^n, 2^n, sparse=TRUE)
+  for (i in 1:n) Hm <- Hm + pauliX_i(i, n)
+  Hm
+}
+
+# ---- Pure-R QAOA simulator with grid search over angles ----
+qaoa_simulate <- function(Hc, Hm, p=2, betas=NULL, gammas=NULL) {
+  n <- round(log2(nrow(Hc))); stopifnot(2^n == nrow(Hc))
+  # initial |+>^n
+  plus <- as.numeric(matrix(1/sqrt(2^n), nrow=2^n, ncol=1))
+  if (is.null(betas))  betas  <- seq(0.1, 1.4, length.out=10)
+  if (is.null(gammas)) gammas <- seq(0.1, 1.4, length.out=10)
+  best <- list(energy=Inf, psi=NULL, beta=NULL, gamma=NULL)
+
+  # precompute: as.matrix for expm
+  HcM <- as.matrix(Hc); HmM <- as.matrix(Hm)
+  for (beta in betas) for (gamma in gammas) {
+    psi <- plus
+    for (layer in 1:p) {
+      Uc <- expm(-1i * gamma * HcM)
+      Um <- expm(-1i * beta  * HmM)
+      psi <- as.vector(Uc %*% (Um %*% psi))
+    }
+    E <- as.numeric(Conj(t(psi)) %*% (HcM %*% psi))
+    if (Re(E) < best$energy) best <- list(energy=Re(E), psi=psi, beta=beta, gamma=gamma)
+  }
+  best
+}
+
+# ---- End-to-end runner (no QuantumOps needed) ----
+run_qaoa_lr_pureR <- function(X, y, n_bits=3, bounds=c(-2,2), fit_intercept=TRUE, l2=0.01,
+                              p_depth=2, seed=7) {
+  set.seed(seed)
+  std <- standardize_xy(X, y); Xs <- std$Xs; ys <- std$ys
+  qubo <- build_lr_qubo(Xs, ys, n_bits=n_bits, bounds=bounds, fit_intercept=fit_intercept, l2=l2)
+  Q <- as.matrix(0.5*(qubo$Qz + t(qubo$Qz))); q <- qubo$qz
+  ising <- qubo_to_ising(Q, q, qubo$const)
+  nvars <- length(ising$h); if (nvars > 12) warning("Large (2^n) Hamiltonian; consider fewer bits/features.")
+  Hc <- build_cost_hamiltonian(ising$h, ising$J); Hm <- build_mixer_hamiltonian(nvars)
+  best <- qaoa_simulate(Hc, Hm, p=p_depth)  # grid over angles; you can refine
+  psi <- best$psi; probs <- as.numeric(Mod(psi)^2)
+  idx <- which.max(probs) - 1
+  bits <- rev(as.integer(intToBits(idx))[1:nvars])  # try big-endian; flip if needed
+  # decode
+  decode <- function(z, meta, p_actual) {
+    n_bits <- meta$n_bits; bounds <- meta$bounds; fit_intercept <- meta$fit_intercept
+    p <- if (fit_intercept) p_actual + 1L else p_actual
+    scales <- 2^(0:(n_bits-1)); scales <- scales / sum(scales)
+    a <- rep(bounds[1], p); B <- matrix(0, p, p*n_bits)
+    for (i in 1:p) for (b in 0:(n_bits-1)) B[i, (i-1)*n_bits + b + 1] <- (bounds[2]-bounds[1]) * scales[b+1]
+    as.numeric(a + B %*% z)
+  }
+  w_std <- decode(bits, qubo$meta, ncol(Xs))
+  list(weights_std=w_std, mse_std=mse_fun(Xs, ys, w_std, fit_intercept), energy=best$energy,
+       beta=best$beta, gamma=best$gamma, bits=bits)
+}
+
+# ---------------- Demo ----------------
+set.seed(1)
+n <- 80; p <- 3
+X <- matrix(rnorm(n*p), n, p)
+w_true <- c(1.0, -0.6, 0.8)
+y <- as.numeric(X %*% w_true + rnorm(n, sd=0.25))
+
+ols <- ols_fit(standardize_xy(X,y)$Xs, standardize_xy(X,y)$ys, TRUE)
+res <- run_qaoa_lr_pureR(X, y, n_bits=3, p_depth=2)
+cat("QAOA (pure-R) MSE (std):", round(res$mse_std, 6), "\n")
