@@ -1,6 +1,6 @@
 run_qaoa_lr_pureR <- function(X, y, n_bits=3, bounds=c(-2,2), fit_intercept=TRUE, l2=0.01,
                               p_depth=2, seed=7) {
-  set.seed(seed)
+  set.seed(seed) 
   std <- standardize_xy(X, y); Xs <- std$Xs; ys <- std$ys
   qubo <- build_lr_qubo(Xs, ys, n_bits=n_bits, bounds=bounds, fit_intercept=fit_intercept, l2=l2)
   Q <- as.matrix(0.5*(qubo$Qz + t(qubo$Qz))); q <- qubo$qz
