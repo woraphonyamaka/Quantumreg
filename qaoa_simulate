@@ -1,0 +1,22 @@
+qaoa_simulate <- function(Hc, Hm, p=2, betas=NULL, gammas=NULL) {
+  n <- round(log2(nrow(Hc))); stopifnot(2^n == nrow(Hc))
+  # initial |+>^n
+  plus <- as.numeric(matrix(1/sqrt(2^n), nrow=2^n, ncol=1))
+  if (is.null(betas))  betas  <- seq(0.1, 1.4, length.out=10)
+  if (is.null(gammas)) gammas <- seq(0.1, 1.4, length.out=10)
+  best <- list(energy=Inf, psi=NULL, beta=NULL, gamma=NULL)
+
+  # precompute: as.matrix for expm
+  HcM <- as.matrix(Hc); HmM <- as.matrix(Hm)
+  for (beta in betas) for (gamma in gammas) {
+    psi <- plus
+    for (layer in 1:p) {
+      Uc <- expm(-1i * gamma * HcM)
+      Um <- expm(-1i * beta  * HmM)
+      psi <- as.vector(Uc %*% (Um %*% psi))
+    }
+    E <- as.numeric(Conj(t(psi)) %*% (HcM %*% psi))
+    if (Re(E) < best$energy) best <- list(energy=Re(E), psi=psi, beta=beta, gamma=gamma)
+  }
+  best
+}
